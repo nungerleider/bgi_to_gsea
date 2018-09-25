@@ -33,8 +33,8 @@ def parse():
             sys.exit("File: {} was not found. Make sure you include path info..i.e. /Users/mac1/filename ".format(path))
     
     if args.direction.lower() not in ['higher', 'lower', 'either']:
-        sys.exit("Direction ('-direction') must be 'higher', 'lower', or 'either'.\n {direction}, which is what you wrote, makes no sense at all.")
-    
+        sys.exit("'-direction' must be 'higher', 'lower', or 'either'.\n '{direction}', which is what you wrote, makes no sense at all.".format(direction=args.direction))
+    args.direction = args.direction.lower()
     if not args.n:
         args.n = len(args.files)
     return args
