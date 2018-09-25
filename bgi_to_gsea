@@ -1,0 +1,183 @@
+#!/usr/bin/env python
+
+import sys
+import argparse
+import os
+import csv
+from collections import Counter, defaultdict
+
+def parse():
+   
+    parser = argparse.ArgumentParser(description='Make GSEA res files with commonly regulated genes from a list of BGI expression files.')
+    
+
+    parser.add_argument("-files", nargs='*', required=True, help="Path to BGI expression files. One or more filepaths (separated by spaces) should be included here.")
+    
+    parser.add_argument("-direction", required=True, type=str, help="The required relative expression level of a gene (Column 4 relative to Column 3).\n Accepts: 'higher', 'lower', 'either'. If 'either', \
+                         as long as the gene meets the FDR requirement, it will be included in the output file")
+    
+    parser.add_argument("-minimum_expression", default=0, type=float, help="Minimum RPKM (one of the two samples must exceed this threshold. Default = 0")
+    
+
+    parser.add_argument("-fdr", type=float, default=.05, help="Maximum value for FDR (Column 5). Default is 0.05")
+    
+    
+    parser.add_argument("-case", default='upper', help="Output gene names in all caps 'upper' or output them as they are listed in the original files 'original'. Many or all GSEA pathways require all caps. Default is all caps.")
+    parser.add_argument("-n", help='Only include genes that are differentially expressed in at least this number of files. Default is to require all files to have differential expression of a gene.')
+
+    args = parser.parse_args()
+
+    # Check path of files
+    for path in args.files: 
+        if not os.path.exists(path):
+            sys.exit("File: {} was not found. Make sure you include path info..i.e. /Users/mac1/filename ".format(path))
+    
+    if args.direction.lower() not in ['higher', 'lower', 'either']:
+        sys.exit("Direction ('-direction') must be 'higher', 'lower', or 'either'.\n {direction}, which is what you wrote, makes no sense at all.")
+    
+    if not args.n:
+        args.n = len(args.files)
+    return args
+
+
+def extract_genes(path, min_exp, direction, fdr, case):
+
+    with open(path, 'r') as csvfile:
+
+        sniffer = csv.Sniffer()
+        header_check = sniffer.has_header(path)
+        csvfile.seek(0)
+
+        reader = csv.reader(csvfile, dialect='excel-tab')
+        if len(next(reader)) < 8:
+            reader = csv.reader(csvfile, dialect='excel')
+            if len(next(reader)) < 8:
+                sys.exit("Unknown file format/ bad header line.")
+        
+        csvfile.seek(0)
+
+        if header_check:
+            next(csvfile)
+        
+        geneset = set()
+        for line in reader:
+            control = float(line[2])
+            experimental = float(line[3])
+            sample_fdr = float(line[5])
+            gene = line[8]
+            if not gene or gene == 'NA':
+                continue
+            if sample_fdr > fdr:
+                continue
+            if max([experimental, control]) < min_exp:
+                continue
+            if direction == 'up' and control > experimental:
+                continue
+            if direction == 'down' and control < experimental:
+                continue
+            if case == 'upper':
+                gene = gene.upper()
+            
+            geneset.add(gene)
+
+    number = len(geneset)
+    
+    if direction == 'either':
+        direction = 'up or down'
+    
+    print("{path}\n {n} genes were {direction} with fdr < {fdr}".format(n=number, direction=direction, path=path, fdr=fdr))
+    
+    return geneset
+
+
+def combine_sets(args):
+
+    min_exp = args.minimum_expression
+    direction = args.direction
+    fdr = args.fdr
+    case = args.case
+
+    initial_list = []
+    for path in args.files:
+        a = extract_genes(path, min_exp, direction, fdr, case)
+        for gene in a:
+            initial_list.append(gene)
+    
+    counter = Counter(initial_list)
+    final_list = []
+    for gene, counts in counter.items():
+        if counts >= args.n:
+            final_list.append(gene)
+    
+    return final_list
+
+
+def prep_gsea(args, gene_list):
+
+    out_genes_ctl = defaultdict(list)
+    out_genes_exp = defaultdict(list)
+
+    for path in args.files:
+        with open(path, 'r') as csvfile:
+
+            sniffer = csv.Sniffer()
+            header_check = sniffer.has_header(path)
+            csvfile.seek(0)
+
+            reader = csv.reader(csvfile, dialect='excel-tab')
+            if len(next(reader)) < 8:
+                reader = csv.reader(csvfile, dialect='excel')
+                if len(next(reader)) < 8:
+                    sys.exit("Unknown file format/ bad header line.")
+            
+            csvfile.seek(0)
+
+            if header_check:
+                next(csvfile)
+            
+            for line in reader:
+                control = float(line[2])
+                experimental = float(line[3])
+                gene = line[8]
+
+                if args.case == 'upper':
+                    gene = gene.upper()
+            
+                if gene in gene_list:
+                    out_genes_ctl[gene].append(control)
+                    out_genes_exp[gene].append(experimental)
+
+    with open("resfile.txt", 'w') as res:
+
+        res.write("NAME\tDESCRIPTION\t")
+        for path in args.files:
+            res.write("%s_experimental\t" % path)
+        for path in args.files[:-1]:
+            res.write("%s_control\t" % path)
+        
+        res.write("%s_control\n" % args.files[-1])
+
+        for gene, values in out_genes_exp.items():
+            exp_values = '\t'.join([str(i) for i in values])
+            res.write("%s\tna\t%s\t" % (gene, exp_values))
+            ctl_values = '\t'.join([str(i) for i in out_genes_ctl[gene]])
+            res.write("%s\n" % ctl_values)
+    
+    with open("clsfile.cls", 'w') as c:
+
+        each_n = len(args.files)
+        sample_n = each_n * 2
+        c.write("%i 2 1\n" % sample_n)
+        c.write("# tumor normal\n")
+        for i in range(each_n):
+            c.write("0 ")
+        for i in range(each_n - 1):
+            c.write("1 ")
+        c.write("1")
+
+def main():
+    args = parse()
+    genelist = combine_sets(args)
+    prep_gsea(args, genelist)
+
+main()
